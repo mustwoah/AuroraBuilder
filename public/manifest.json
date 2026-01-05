@@ -1,0 +1,20 @@
+{
+  "name": "Aurora Builder",
+  "short_name": "Aurora",
+  "description": "URL to APK Generator - Transform any website into a native Android app",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#050a08",
+  "theme_color": "#00DC82",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><defs><linearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'><stop offset='0%25' stop-color='%2300DC82'/><stop offset='100%25' stop-color='%2300B4D8'/></linearGradient></defs><circle cx='50' cy='50' r='45' fill='%23050a08'/><path d='M50 15 L72 78 L61 78 L55 60 L45 60 L39 78 L28 78 Z' fill='url(%23g)'/></svg>",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ],
+  "categories": ["developer", "utilities"],
+  "lang": "en"
+}
