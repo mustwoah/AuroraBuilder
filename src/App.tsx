@@ -819,10 +819,22 @@ export function App() {
     return css
   }
 
+  // Helper to safely get hex color without #
+  const getHexColor = (color: string | undefined, fallback: string = '000000'): string => {
+    if (!color) return fallback
+    return color.startsWith('#') ? color.slice(1) : color
+  }
+
   // Generate Flutter project files
   const generateFiles = useCallback(() => {
     const files: Record<string, string> = {}
     const blockingCss = generateBlockingCss()
+    
+    // Safe color values
+    const statusBarHex = getHexColor(config.statusBarColor, '000000')
+    const backgroundHex = getHexColor(config.backgroundColor, 'ffffff')
+    const splashHex = getHexColor(config.splashColor, '0a0a0a')
+    const primaryHex = getHexColor(config.primaryColor, '00DC82')
 
     files['lib/main.dart'] = `import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -832,7 +844,7 @@ void main() {
   WidgetsFlutterBinding.ensureInitialized();
   ${config.fullscreen ? "SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);" : ""}
   SystemChrome.setSystemUIOverlayStyle(SystemUiOverlayStyle(
-    statusBarColor: Color(0xFF${config.statusBarColor.slice(1)}),
+    statusBarColor: Color(0xFF${statusBarHex}),
   ));
   runApp(const MyApp());
 }
@@ -847,7 +859,7 @@ class MyApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         primarySwatch: Colors.green,
-        scaffoldBackgroundColor: Color(0xFF${config.backgroundColor.slice(1)}),
+        scaffoldBackgroundColor: Color(0xFF${backgroundHex}),
       ),
       home: const SplashScreen(),
     );
@@ -886,7 +898,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xFF${config.splashColor.slice(1)}),
+      backgroundColor: Color(0xFF${splashHex}),
       body: Center(
         child: FadeTransition(
           opacity: _animation,
@@ -896,9 +908,9 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
               Container(
                 width: 120, height: 120,
                 decoration: BoxDecoration(
-                  color: Color(0xFF${config.primaryColor.slice(1)}),
+                  color: Color(0xFF${primaryHex}),
                   borderRadius: BorderRadius.circular(30),
-                  boxShadow: [BoxShadow(color: Color(0xFF${config.primaryColor.slice(1)}).withOpacity(0.5), blurRadius: 30, spreadRadius: 5)],
+                  boxShadow: [BoxShadow(color: Color(0xFF${primaryHex}).withOpacity(0.5), blurRadius: 30, spreadRadius: 5)],
                 ),
                 child: Icon(Icons.rocket_launch, size: 60, color: Colors.white),
               ),
@@ -933,7 +945,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
     super.initState();
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
-      ..setBackgroundColor(Color(0xFF${config.backgroundColor.slice(1)}))
+      ..setBackgroundColor(Color(0xFF${backgroundHex}))
       ..setNavigationDelegate(NavigationDelegate(
         onPageStarted: (_) => setState(() => _isLoading = true),
         onProgress: (p) => setState(() => _progress = p / 100),
@@ -967,7 +979,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
           child: Stack(
             children: [
               WebViewWidget(controller: _controller),
-              ${config.loadingIndicator ? `if (_isLoading) Positioned(top: 0, left: 0, right: 0, child: LinearProgressIndicator(value: _progress, backgroundColor: Colors.transparent, color: Color(0xFF${config.primaryColor.slice(1)})))` : ""},
+              ${config.loadingIndicator ? `if (_isLoading) Positioned(top: 0, left: 0, right: 0, child: LinearProgressIndicator(value: _progress, backgroundColor: Colors.transparent, color: Color(0xFF${primaryHex})))` : ""},
             ],
           ),
         ),
@@ -1105,6 +1117,9 @@ jobs:
       return
     }
 
+    // Immediately move to step 7 (Download page) when build starts
+    setCurrentStep(7)
+
     setIsBuilding(true)
     setBuildProgress(0)
     setBuildLogs([])
@@ -1210,8 +1225,7 @@ jobs:
       addLog('Triggered GitHub Actions workflow')
       addLog('Waiting for build to complete...')
 
-      // Move to step 7 for build progress view
-      setCurrentStep(7)
+      // Already moved to step 7 at the start of build
 
       let attempts = 0
       const maxAttempts = 60
