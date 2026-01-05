@@ -1195,6 +1195,10 @@ jobs:
         body: JSON.stringify({ base_tree: baseSha, tree: blobs })
       })
       const tree = await treeRes.json()
+      
+      if (!tree || !tree.sha) {
+        throw new Error('Failed to create tree')
+      }
 
       const commitRes = await fetch(`https://api.github.com/repos/${repo.full_name}/git/commits`, {
         method: 'POST',
@@ -1209,7 +1213,12 @@ jobs:
         })
       })
       const commit = await commitRes.json()
-      addLog('Created commit: ' + commit.sha.slice(0, 7))
+      
+      if (!commit || !commit.sha) {
+        throw new Error('Failed to create commit')
+      }
+      
+      addLog('Created commit: ' + commit.sha.substring(0, 7))
 
       await fetch(`https://api.github.com/repos/${repo.full_name}/git/refs/heads/main`, {
         method: 'PATCH',
