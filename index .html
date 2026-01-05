@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0%25' y1='0%25' x2='100%25' y2='100%25'%3E%3Cstop offset='0%25' stop-color='%2300DC82'/%3E%3Cstop offset='50%25' stop-color='%2300B4D8'/%3E%3Cstop offset='100%25' stop-color='%237B2CBF'/%3E%3C/linearGradient%3E%3C/defs%3E%3Ccircle cx='50' cy='50' r='45' fill='none' stroke='url(%23g)' stroke-width='3'/%3E%3Cpath d='M50 15 L72 78 L61 78 L55 60 L45 60 L39 78 L28 78 Z' fill='url(%23g)'/%3E%3C/svg%3E" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    
+    <!-- SEO Meta Tags -->
+    <title>Aurora Builder - URL to APK Generator | Convert Any Website to Android App</title>
+    <meta name="description" content="Aurora Builder is a free, open-source tool to convert any website URL into a native Android APK app. Build Flutter WebView apps with content blocking, custom themes, and one-click APK generation via GitHub Actions." />
+    <meta name="keywords" content="URL to APK, website to app, webview app builder, flutter app generator, android app builder, convert website to android app, PWA to APK, web wrapper, aurora builder, free apk builder" />
+    <meta name="author" content="Mostafa" />
+    <meta name="robots" content="index, follow" />
+    <link rel="canonical" href="https://aurora-builder.vercel.app" />
+    
+    <!-- Open Graph / Facebook -->
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://aurora-builder.vercel.app" />
+    <meta property="og:title" content="Aurora Builder - URL to APK Generator" />
+    <meta property="og:description" content="Convert any website into a native Android app. Free, open-source, and powered by Flutter. Features content blocking, custom themes, and one-click APK builds." />
+    <meta property="og:image" content="https://aurora-builder.vercel.app/og-image.png" />
+    <meta property="og:site_name" content="Aurora Builder" />
+    
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:url" content="https://aurora-builder.vercel.app" />
+    <meta name="twitter:title" content="Aurora Builder - URL to APK Generator" />
+    <meta name="twitter:description" content="Convert any website into a native Android app. Free, open-source, and powered by Flutter." />
+    <meta name="twitter:image" content="https://aurora-builder.vercel.app/og-image.png" />
+    
+    <!-- PWA -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="theme-color" content="#00DC82" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Aurora Builder" />
+    <link rel="apple-touch-icon" href="/icon-192.png" />
+    
+    <!-- Preconnect for performance -->
+    <link rel="preconnect" href="https://api.github.com" />
+    <link rel="preconnect" href="https://api.microlink.io" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    
+    <!-- VazirMatn Font - Works great with all languages including Arabic and Persian -->
+    <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+    
+    <!-- JSON-LD Structured Data -->
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "WebApplication",
+      "name": "Aurora Builder",
+      "description": "Convert any website URL into a native Android APK app with content blocking and custom themes.",
+      "url": "https://aurora-builder.vercel.app",
+      "applicationCategory": "DeveloperApplication",
+      "operatingSystem": "Web, Android",
+      "offers": {
+        "@type": "Offer",
+        "price": "0",
+        "priceCurrency": "USD"
+      },
+      "author": {
+        "@type": "Person",
+        "name": "Mostafa",
+        "url": "https://github.com/moustuofa"
+      }
+    }
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+    
+    <!-- Service Worker Registration -->
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(() => {});
+        });
+      }
+    </script>
+  </body>
+</html>
