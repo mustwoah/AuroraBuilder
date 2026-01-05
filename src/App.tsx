@@ -1177,28 +1177,60 @@ jobs:
             },
             body: JSON.stringify({ content, encoding: 'utf-8' })
           })
+          
+          if (!blobRes.ok) {
+            const errData = await blobRes.json()
+            throw new Error(`Failed to upload ${path}: ${errData.message || 'Unknown error'}`)
+          }
+          
           const blob = await blobRes.json()
+          
+          if (!blob || !blob.sha) {
+            throw new Error(`Failed to get SHA for ${path}`)
+          }
+          
           addLog(`Uploaded: ${path}`)
-          return { path, sha: blob.sha, mode: '100644', type: 'blob' }
+          return { path, sha: blob.sha }
         })
       )
 
       setBuildProgress(40)
       setBuildStatus('💾 Creating commit...')
 
+      const treePayload = {
+        base_tree: baseSha,
+        tree: blobs.map(b => ({
+          path: b.path,
+          mode: '100644',
+          type: 'blob',
+          sha: b.sha
+        }))
+      }
+      
+      addLog('Creating git tree...')
+      
       const treeRes = await fetch(`https://api.github.com/repos/${repo.full_name}/git/trees`, {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${githubToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ base_tree: baseSha, tree: blobs })
+        body: JSON.stringify(treePayload)
       })
-      const tree = await treeRes.json()
       
-      if (!tree || !tree.sha) {
-        throw new Error('Failed to create tree')
+      const treeData = await treeRes.json()
+      
+      if (!treeRes.ok) {
+        addLog(`Tree error: ${treeData.message || JSON.stringify(treeData)}`)
+        throw new Error(`Failed to create tree: ${treeData.message || 'Unknown error'}`)
       }
+      
+      if (!treeData || !treeData.sha) {
+        addLog('Tree response missing SHA')
+        throw new Error('Failed to create tree: No SHA returned')
+      }
+      
+      addLog('Git tree created successfully')
 
       const commitRes = await fetch(`https://api.github.com/repos/${repo.full_name}/git/commits`, {
         method: 'POST',
@@ -1208,7 +1240,7 @@ jobs:
         },
         body: JSON.stringify({
           message: '🚀 Aurora Builder: Initial commit',
-          tree: tree.sha,
+          tree: treeData.sha,
           parents: [baseSha]
         })
       })
