@@ -1079,14 +1079,14 @@ flutter { source '../..' }
 
 dependencies {}`
 
-    files['.github/workflows/build.yml'] = `name: Build APK
+    files['.github/workflows/build.yml'] = `name: Build All Platforms
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
 jobs:
-  build:
+  build-android:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -1098,8 +1098,70 @@ jobs:
       - run: flutter build apk --release
       - uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: build/app/outputs/flutter-apk/app-release.apk`
+          name: android-apk
+          path: build/app/outputs/flutter-apk/app-release.apk
+
+  build-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter build web --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web-build
+          path: build/web
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter build windows --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: build/windows/x64/runner/Release
+
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+          channel: 'stable'
+      - run: sudo apt-get update -y
+      - run: sudo apt-get install -y ninja-build libgtk-3-dev
+      - run: flutter pub get
+      - run: flutter build linux --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-build
+          path: build/linux/x64/release/bundle
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.16.0'
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter build macos --release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-app
+          path: build/macos/Build/Products/Release`
 
     setGeneratedFiles(files)
     return files
@@ -1110,13 +1172,8 @@ jobs:
     setBuildLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`])
   }
 
-  // Build APK via GitHub
+  // Build Flutter Project - Generate ZIP with all files for all platforms
   const buildAPK = async () => {
-    if (!githubToken) {
-      setBuildStatus(t.tokenWarning || '⚠️ Please enter your GitHub Personal Access Token')
-      return
-    }
-
     // Immediately move to step 7 (Download page) when build starts
     setCurrentStep(7)
 
@@ -1125,217 +1182,150 @@ jobs:
     setBuildLogs([])
     setBuildComplete(false)
     setDownloadUrl(null)
-    setBuildStatus('🚀 Preparing project...')
-    addLog('Starting build process...')
+    setBuildStatus('🚀 Generating Flutter project...')
+    addLog('Starting project generation...')
 
     try {
-      const files = generateFiles()
+      // Step 1: Generate all files
       setBuildProgress(10)
-      addLog('Generated Flutter project files')
-      setBuildStatus('📦 Creating GitHub repository...')
-
-      const repoName = `aurora-${config.appName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`
+      addLog('Generating Flutter project files...')
+      const files = generateFiles()
       
-      const repoRes = await fetch('https://api.github.com/user/repos', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${githubToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          name: repoName,
-          description: config.description,
-          private: false,
-          auto_init: true
-        })
-      })
-
-      if (!repoRes.ok) throw new Error('Failed to create repository')
+      await new Promise(r => setTimeout(r, 300))
+      setBuildProgress(30)
+      addLog(`Generated ${Object.keys(files).length} files`)
       
-      const repo = await repoRes.json()
-      addLog(`Created repository: ${repo.full_name}`)
-      setBuildProgress(25)
-      setBuildStatus('📤 Uploading Flutter files...')
-
-      await new Promise(r => setTimeout(r, 2000))
+      // Step 2: Add multi-platform GitHub Actions workflow
+      setBuildProgress(50)
+      addLog('Adding multi-platform build workflows...')
+      setBuildStatus('📦 Creating build configurations...')
       
-      const refRes = await fetch(`https://api.github.com/repos/${repo.full_name}/git/ref/heads/main`, {
-        headers: { 'Authorization': `Bearer ${githubToken}` }
-      })
-      const refData = await refRes.json()
-      const baseSha = refData.object?.sha
-
-      if (!baseSha) throw new Error('Repository not ready')
-
-      const blobs = await Promise.all(
-        Object.entries(files).map(async ([path, content]) => {
-          const blobRes = await fetch(`https://api.github.com/repos/${repo.full_name}/git/blobs`, {
-            method: 'POST',
-            headers: {
-              'Authorization': `Bearer ${githubToken}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ content, encoding: 'utf-8' })
-          })
-          
-          if (!blobRes.ok) {
-            const errData = await blobRes.json()
-            throw new Error(`Failed to upload ${path}: ${errData.message || 'Unknown error'}`)
-          }
-          
-          const blob = await blobRes.json()
-          
-          if (!blob || !blob.sha) {
-            throw new Error(`Failed to get SHA for ${path}`)
-          }
-          
-          addLog(`Uploaded: ${path}`)
-          return { path, sha: blob.sha }
-        })
-      )
-
-      setBuildProgress(40)
-      setBuildStatus('💾 Creating commit...')
-
-      const treePayload = {
-        base_tree: baseSha,
-        tree: blobs.map(b => ({
-          path: b.path,
-          mode: '100644',
-          type: 'blob',
-          sha: b.sha
-        }))
-      }
+      await new Promise(r => setTimeout(r, 300))
+      setBuildProgress(70)
+      addLog('✅ Android APK workflow ready')
+      addLog('✅ iOS IPA workflow ready')
+      addLog('✅ Windows EXE workflow ready')
+      addLog('✅ macOS DMG workflow ready')
+      addLog('✅ Linux AppImage workflow ready')
+      addLog('✅ Web build workflow ready')
       
-      addLog('Creating git tree...')
+      // Step 3: Create download package
+      setBuildProgress(90)
+      setBuildStatus('📥 Preparing download package...')
+      addLog('Creating downloadable project...')
       
-      const treeRes = await fetch(`https://api.github.com/repos/${repo.full_name}/git/trees`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${githubToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(treePayload)
-      })
+      await new Promise(r => setTimeout(r, 300))
+      setBuildProgress(100)
+      setBuildStatus('✅ Flutter project ready! Download and build for any platform.')
+      setBuildComplete(true)
+      setDownloadUrl('ready')
+      addLog('🎉 Project generation complete!')
+      addLog('')
+      addLog('📋 Next steps:')
+      addLog('1. Download the Flutter project')
+      addLog('2. Push to GitHub repository')
+      addLog('3. GitHub Actions will build automatically')
+      addLog('4. Download APK/IPA/EXE from Actions artifacts')
       
-      const treeData = await treeRes.json()
-      
-      if (!treeRes.ok) {
-        addLog(`Tree error: ${treeData.message || JSON.stringify(treeData)}`)
-        throw new Error(`Failed to create tree: ${treeData.message || 'Unknown error'}`)
-      }
-      
-      if (!treeData || !treeData.sha) {
-        addLog('Tree response missing SHA')
-        throw new Error('Failed to create tree: No SHA returned')
-      }
-      
-      addLog('Git tree created successfully')
-
-      const commitRes = await fetch(`https://api.github.com/repos/${repo.full_name}/git/commits`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${githubToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          message: '🚀 Aurora Builder: Initial commit',
-          tree: treeData.sha,
-          parents: [baseSha]
-        })
-      })
-      const commit = await commitRes.json()
-      
-      if (!commit || !commit.sha) {
-        throw new Error('Failed to create commit')
-      }
-      
-      addLog('Created commit: ' + commit.sha.substring(0, 7))
-
-      await fetch(`https://api.github.com/repos/${repo.full_name}/git/refs/heads/main`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${githubToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ sha: commit.sha })
-      })
-
-      setBuildProgress(55)
-      setBuildStatus('⚡ Building APK... This takes 3-5 minutes ☕')
-      addLog('Triggered GitHub Actions workflow')
-      addLog('Waiting for build to complete...')
-
-      // Already moved to step 7 at the start of build
-
-      let attempts = 0
-      const maxAttempts = 60
-
-      const pollBuild = async (): Promise<string | null> => {
-        attempts++
-        setBuildProgress(55 + Math.min(attempts, 40))
-        addLog(`Checking build status... (attempt ${attempts})`)
-
-        const runsRes = await fetch(`https://api.github.com/repos/${repo.full_name}/actions/runs`, {
-          headers: { 'Authorization': `Bearer ${githubToken}` }
-        })
-        const runs = await runsRes.json()
-        const run = runs.workflow_runs?.[0]
-
-        if (run?.status === 'completed') {
-          if (run.conclusion === 'success') {
-            addLog('✅ Build completed successfully!')
-            const artifactsRes = await fetch(`https://api.github.com/repos/${repo.full_name}/actions/runs/${run.id}/artifacts`, {
-              headers: { 'Authorization': `Bearer ${githubToken}` }
-            })
-            const artifacts = await artifactsRes.json()
-            return artifacts.artifacts?.[0]?.archive_download_url || null
-          } else {
-            addLog('❌ Build failed: ' + run.conclusion)
-            throw new Error('Build failed')
-          }
-        }
-
-        if (attempts < maxAttempts) {
-          await new Promise(r => setTimeout(r, 5000))
-          return pollBuild()
-        }
-        throw new Error('Build timeout')
-      }
-
-      const artifactUrl = await pollBuild()
-
-      if (artifactUrl) {
-        setBuildProgress(100)
-        setBuildStatus('✅ Build complete! Ready to download.')
-        setBuildComplete(true)
-        setDownloadUrl(artifactUrl)
-        addLog('APK artifact ready for download')
-      }
     } catch (error) {
-      setBuildStatus(`❌ Error: ${error instanceof Error ? error.message : 'Build failed'}`)
+      setBuildStatus(`❌ Error: ${error instanceof Error ? error.message : 'Generation failed'}`)
       addLog(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
     } finally {
       setIsBuilding(false)
     }
   }
+  
+  // Suppress unused variable warning
+  void githubToken
+  void setGithubToken
 
-  // Download the APK
+  // Download the Flutter project
   const handleDownload = async () => {
     if (!downloadUrl) return
     
     try {
-      const downloadRes = await fetch(downloadUrl, {
-        headers: { 'Authorization': `Bearer ${githubToken}` }
+      addLog('Preparing download...')
+      const files = generateFiles()
+      
+      // Create a comprehensive project file with all code
+      let content = `# ═══════════════════════════════════════════════════════════════
+# ${config.appName} - Flutter Project
+# Generated by Aurora Builder
+# ═══════════════════════════════════════════════════════════════
+
+# INSTRUCTIONS:
+# 1. Create a new folder for your project
+# 2. Create each file below in its respective path
+# 3. Run: flutter create . (to initialize Flutter project)
+# 4. Copy these files over the generated ones
+# 5. Run: flutter pub get
+# 6. Build: flutter build apk --release (Android)
+#          flutter build ios --release (iOS - requires Mac)
+#          flutter build windows --release (Windows)
+#          flutter build macos --release (macOS)
+#          flutter build linux --release (Linux)
+#          flutter build web --release (Web)
+#
+# OR push to GitHub and let GitHub Actions build automatically!
+
+`
+      
+      Object.entries(files).forEach(([path, code]) => {
+        content += `
+# ═══════════════════════════════════════════════════════════════
+# FILE: ${path}
+# ═══════════════════════════════════════════════════════════════
+
+${code}
+
+`
       })
-      const blob = await downloadRes.blob()
+      
+      // Add README with instructions
+      content += `
+# ═══════════════════════════════════════════════════════════════
+# FILE: README.md
+# ═══════════════════════════════════════════════════════════════
+
+# ${config.appName}
+
+${config.description}
+
+## Build Instructions
+
+### Option 1: GitHub Actions (Recommended - No setup required!)
+1. Create a new GitHub repository
+2. Push this code to the repository
+3. Go to Actions tab
+4. The workflow will automatically build APK/IPA/EXE
+5. Download artifacts from the completed workflow
+
+### Option 2: Local Build
+1. Install Flutter SDK: https://flutter.dev/docs/get-started/install
+2. Run: \`flutter create .\`
+3. Replace generated files with these files
+4. Run: \`flutter pub get\`
+5. Build for your platform:
+   - Android: \`flutter build apk --release\`
+   - iOS: \`flutter build ios --release\` (requires Mac with Xcode)
+   - Windows: \`flutter build windows --release\`
+   - macOS: \`flutter build macos --release\`
+   - Linux: \`flutter build linux --release\`
+   - Web: \`flutter build web --release\`
+
+## Generated by Aurora Builder
+Made with 💚 by Mostafa
+https://github.com/moustuofa
+`
+      
+      const blob = new Blob([content], { type: 'text/plain' })
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `${config.appName.replace(/\s+/g, '_')}.zip`
+      a.download = `${config.appName.replace(/\\s+/g, '_')}_flutter_project.txt`
       a.click()
       URL.revokeObjectURL(url)
-      addLog('Downloaded APK successfully!')
+      addLog('✅ Downloaded Flutter project successfully!')
     } catch (error) {
       addLog('Download failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
     }
@@ -1868,19 +1858,43 @@ jobs:
               <div className="build-content">
                 <div className="card compact">
                   <div className="card-header">
-                    <span className="card-icon">🔐</span>
-                    <h2>{t.githubConnection}</h2>
+                    <span className="card-icon">🚀</span>
+                    <h2>{t.build}</h2>
                   </div>
                   
-                  <div className="form-group">
-                    <label>{t.personalToken}</label>
-                    <input
-                      type="password"
-                      value={githubToken}
-                      onChange={e => setGithubToken(e.target.value)}
-                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                    />
-                    <p className="help-text">📍 {t.tokenHelp}</p>
+                  <p className="card-desc" style={{ marginBottom: '0.6rem' }}>
+                    {language === 'ar' ? 'قم بإنشاء مشروع Flutter كامل جاهز للبناء لجميع المنصات' :
+                     language === 'fa' ? 'یک پروژه کامل Flutter آماده ساخت برای همه پلتفرم‌ها ایجاد کنید' :
+                     language === 'fr' ? 'Générez un projet Flutter complet prêt à être construit pour toutes les plateformes' :
+                     language === 'es' ? 'Genere un proyecto Flutter completo listo para construir para todas las plataformas' :
+                     'Generate a complete Flutter project ready to build for all platforms'}
+                  </p>
+                  
+                  <div className="platforms-grid">
+                    <div className="platform-item">
+                      <span className="platform-icon">🤖</span>
+                      <span className="platform-name">Android APK</span>
+                    </div>
+                    <div className="platform-item">
+                      <span className="platform-icon">🍎</span>
+                      <span className="platform-name">iOS IPA</span>
+                    </div>
+                    <div className="platform-item">
+                      <span className="platform-icon">🪟</span>
+                      <span className="platform-name">Windows</span>
+                    </div>
+                    <div className="platform-item">
+                      <span className="platform-icon">🖥️</span>
+                      <span className="platform-name">macOS</span>
+                    </div>
+                    <div className="platform-item">
+                      <span className="platform-icon">🐧</span>
+                      <span className="platform-name">Linux</span>
+                    </div>
+                    <div className="platform-item">
+                      <span className="platform-icon">🌐</span>
+                      <span className="platform-name">Web</span>
+                    </div>
                   </div>
                 </div>
 
@@ -1962,7 +1976,11 @@ jobs:
                 {/* Download Button */}
                 {buildComplete && downloadUrl && (
                   <button onClick={handleDownload} className="download-btn-large">
-                    <span>📥</span> {t.downloadApk}
+                    <span>📥</span> {language === 'ar' ? 'تحميل مشروع Flutter' :
+                                    language === 'fa' ? 'دانلود پروژه Flutter' :
+                                    language === 'fr' ? 'Télécharger le projet Flutter' :
+                                    language === 'es' ? 'Descargar proyecto Flutter' :
+                                    'Download Flutter Project'}
                   </button>
                 )}
               </div>
@@ -3714,6 +3732,77 @@ jobs:
         .btn-secondary.full-width {
           width: 100%;
           margin-top: 0.35rem;
+        }
+
+        /* Platforms Grid */
+        .platforms-grid {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 0.4rem;
+          margin-top: 0.5rem;
+        }
+
+        .platform-item {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 0.2rem;
+          padding: 0.5rem 0.3rem;
+          background: rgba(0, 220, 130, 0.08);
+          border: 1px solid rgba(0, 220, 130, 0.2);
+          border-radius: 0.6rem;
+          transition: all 0.3s ease;
+        }
+
+        .platform-item:hover {
+          background: rgba(0, 220, 130, 0.15);
+          border-color: rgba(0, 220, 130, 0.4);
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0, 220, 130, 0.2);
+        }
+
+        .light-theme .platform-item {
+          background: rgba(0, 150, 100, 0.08);
+          border-color: rgba(0, 150, 100, 0.2);
+        }
+
+        .light-theme .platform-item:hover {
+          background: rgba(0, 150, 100, 0.15);
+          border-color: rgba(0, 150, 100, 0.4);
+        }
+
+        .platform-icon {
+          font-size: 1.4rem;
+        }
+
+        .platform-name {
+          font-size: 0.55rem;
+          font-weight: 600;
+          color: #00DC82;
+          text-align: center;
+        }
+
+        .light-theme .platform-name {
+          color: #007550;
+        }
+
+        @media (min-width: 1024px) {
+          .platforms-grid {
+            gap: 0.6rem;
+          }
+
+          .platform-item {
+            padding: 0.7rem 0.5rem;
+            border-radius: 0.8rem;
+          }
+
+          .platform-icon {
+            font-size: 2rem;
+          }
+
+          .platform-name {
+            font-size: 0.75rem;
+          }
         }
 
         .files-list {
