@@ -1172,8 +1172,16 @@ jobs:
     setBuildLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`])
   }
 
-  // Build Flutter Project - Generate ZIP with all files for all platforms
+  // Build APK via GitHub Actions
   const buildAPK = async () => {
+    // Validate GitHub token - remove any non-ASCII/non-printable characters
+    const cleanToken = githubToken.trim().replace(/[^\x20-\x7E]/g, '')
+    
+    if (!cleanToken || cleanToken.length < 10) {
+      setBuildStatus(t.tokenWarning || '⚠️ Please enter a valid GitHub Personal Access Token')
+      return
+    }
+
     // Immediately move to step 7 (Download page) when build starts
     setCurrentStep(7)
 
@@ -1182,152 +1190,298 @@ jobs:
     setBuildLogs([])
     setBuildComplete(false)
     setDownloadUrl(null)
-    setBuildStatus('🚀 Generating Flutter project...')
-    addLog('Starting project generation...')
+    setBuildStatus('🚀 Starting build process...')
+    addLog('Starting build process...')
+
+    const token = cleanToken
+    const repoName = `aurora-${config.appName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}`
 
     try {
       // Step 1: Generate all files
-      setBuildProgress(10)
+      setBuildProgress(5)
       addLog('Generating Flutter project files...')
       const files = generateFiles()
+      addLog('Generated Flutter project files')
       
-      await new Promise(r => setTimeout(r, 300))
-      setBuildProgress(30)
-      addLog(`Generated ${Object.keys(files).length} files`)
+      // Step 2: Get authenticated user - try different auth header formats
+      setBuildProgress(10)
+      addLog('Authenticating with GitHub...')
       
-      // Step 2: Add multi-platform GitHub Actions workflow
-      setBuildProgress(50)
-      addLog('Adding multi-platform build workflows...')
-      setBuildStatus('📦 Creating build configurations...')
+      // Determine auth header format based on token prefix
+      let authHeader = `token ${token}`
+      if (token.startsWith('github_pat_')) {
+        authHeader = `Bearer ${token}`
+      }
       
-      await new Promise(r => setTimeout(r, 300))
-      setBuildProgress(70)
-      addLog('✅ Android APK workflow ready')
-      addLog('✅ iOS IPA workflow ready')
-      addLog('✅ Windows EXE workflow ready')
-      addLog('✅ macOS DMG workflow ready')
-      addLog('✅ Linux AppImage workflow ready')
-      addLog('✅ Web build workflow ready')
+      const userResponse = await fetch('https://api.github.com/user', {
+        headers: { 
+          'Authorization': authHeader,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      })
       
-      // Step 3: Create download package
-      setBuildProgress(90)
-      setBuildStatus('📥 Preparing download package...')
-      addLog('Creating downloadable project...')
+      if (!userResponse.ok) {
+        const errorStatus = userResponse.status
+        let errorMsg = 'Invalid GitHub token.'
+        if (errorStatus === 401) {
+          errorMsg = 'Invalid or expired token. Please generate a new token.'
+        } else if (errorStatus === 403) {
+          errorMsg = 'Token lacks required permissions. Make sure you selected "repo" and "workflow" scopes.'
+        }
+        addLog(`Auth failed: HTTP ${errorStatus}`)
+        throw new Error(errorMsg)
+      }
       
-      await new Promise(r => setTimeout(r, 300))
+      const userData = await userResponse.json()
+      const actualOwner = userData.login
+      addLog(`Authenticated as: ${actualOwner}`)
+      
+      // Step 3: Create repository
+      setBuildProgress(15)
+      setBuildStatus('📁 Creating GitHub repository...')
+      addLog('Creating GitHub repository...')
+      
+      const repoResponse = await fetch('https://api.github.com/user/repos', {
+        method: 'POST',
+        headers: {
+          'Authorization': authHeader,
+          'Accept': 'application/vnd.github+json',
+          'Content-Type': 'application/json',
+          'X-GitHub-Api-Version': '2022-11-28'
+        },
+        body: JSON.stringify({
+          name: repoName,
+          description: `${config.appName} - Built with Aurora Builder`,
+          private: false,
+          auto_init: true
+        })
+      })
+      
+      if (!repoResponse.ok) {
+        const error = await repoResponse.json()
+        throw new Error(`Failed to create repository: ${error.message || 'Unknown error'}`)
+      }
+      
+      addLog(`Created repository: ${actualOwner}/${repoName}`)
+      
+      // Wait for repository to be fully initialized
+      await new Promise(r => setTimeout(r, 4000))
+      setBuildProgress(20)
+      
+      // Step 4: Upload files one by one using Contents API
+      setBuildStatus('📤 Uploading project files...')
+      const fileEntries = Object.entries(files)
+      
+      for (let i = 0; i < fileEntries.length; i++) {
+        const [path, content] = fileEntries[i]
+        const progress = 20 + Math.round((i / fileEntries.length) * 30)
+        setBuildProgress(progress)
+        
+        const uploadResponse = await fetch(`https://api.github.com/repos/${actualOwner}/${repoName}/contents/${path}`, {
+          method: 'PUT',
+          headers: {
+            'Authorization': authHeader,
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json',
+            'X-GitHub-Api-Version': '2022-11-28'
+          },
+          body: JSON.stringify({
+            message: `Add ${path}`,
+            content: btoa(unescape(encodeURIComponent(content)))
+          })
+        })
+        
+        if (!uploadResponse.ok) {
+          const error = await uploadResponse.json()
+          throw new Error(`Failed to upload ${path}: ${error.message || 'Unknown error'}`)
+        }
+        
+        addLog(`Uploaded: ${path}`)
+      }
+      
+      // Wait for GitHub Actions to start
+      setBuildProgress(55)
+      setBuildStatus('⚙️ Triggering GitHub Actions...')
+      addLog('Waiting for GitHub Actions to start...')
+      await new Promise(r => setTimeout(r, 5000))
+      
+      // Step 5: Poll for workflow run
+      setBuildProgress(60)
+      let workflowRun = null
+      let attempts = 0
+      
+      while (!workflowRun && attempts < 30) {
+        attempts++
+        await new Promise(r => setTimeout(r, 3000))
+        
+        const runsResponse = await fetch(`https://api.github.com/repos/${actualOwner}/${repoName}/actions/runs`, {
+          headers: {
+            'Authorization': authHeader,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28'
+          }
+        })
+        
+        if (runsResponse.ok) {
+          const runsData = await runsResponse.json()
+          if (runsData.workflow_runs && runsData.workflow_runs.length > 0) {
+            workflowRun = runsData.workflow_runs[0]
+            addLog(`Workflow started: ${workflowRun.name || 'Build'}`)
+            break
+          }
+        }
+        
+        if (attempts % 5 === 0) {
+          addLog(`Still waiting for workflow to start... (${attempts * 3}s)`)
+        }
+      }
+      
+      if (!workflowRun) {
+        throw new Error('Workflow did not start. Please check the repository manually.')
+      }
+      
+      // Step 6: Poll for workflow completion
+      setBuildStatus('🔨 Building APK...')
+      addLog('Building APK (this may take 3-5 minutes)...')
+      
+      while (true) {
+        await new Promise(r => setTimeout(r, 10000))
+        
+        const runResponse = await fetch(`https://api.github.com/repos/${actualOwner}/${repoName}/actions/runs/${workflowRun.id}`, {
+          headers: {
+            'Authorization': authHeader,
+            'Accept': 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28'
+          }
+        })
+        
+        if (runResponse.ok) {
+          const runData = await runResponse.json()
+          
+          if (runData.status === 'completed') {
+            if (runData.conclusion === 'success') {
+              setBuildProgress(90)
+              addLog('✅ Build completed successfully!')
+              break
+            } else {
+              throw new Error(`Build failed with conclusion: ${runData.conclusion}`)
+            }
+          } else {
+            // Update progress
+            const elapsed = Date.now() - new Date(runData.created_at).getTime()
+            const progress = Math.min(85, 60 + Math.floor(elapsed / 10000))
+            setBuildProgress(progress)
+            addLog(`Build in progress... (${runData.status})`)
+          }
+        }
+      }
+      
+      // Step 7: Get artifacts
+      setBuildProgress(95)
+      setBuildStatus('📦 Fetching APK...')
+      addLog('Fetching build artifacts...')
+      
+      const artifactsResponse = await fetch(`https://api.github.com/repos/${actualOwner}/${repoName}/actions/runs/${workflowRun.id}/artifacts`, {
+        headers: {
+          'Authorization': authHeader,
+          'Accept': 'application/vnd.github+json',
+          'X-GitHub-Api-Version': '2022-11-28'
+        }
+      })
+      
+      if (artifactsResponse.ok) {
+        const artifactsData = await artifactsResponse.json()
+        const apkArtifact = artifactsData.artifacts?.find((a: {name: string}) => a.name.includes('apk') || a.name.includes('android'))
+        
+        if (apkArtifact) {
+          setDownloadUrl(apkArtifact.archive_download_url)
+          addLog(`✅ APK ready: ${apkArtifact.name}`)
+        } else {
+          // Provide link to repository actions page
+          setDownloadUrl(`https://github.com/${actualOwner}/${repoName}/actions`)
+          addLog('⚠️ APK artifact not found. Check the Actions page manually.')
+        }
+      }
+      
       setBuildProgress(100)
-      setBuildStatus('✅ Flutter project ready! Download and build for any platform.')
+      setBuildStatus('✅ Build Complete!')
       setBuildComplete(true)
-      setDownloadUrl('ready')
-      addLog('🎉 Project generation complete!')
-      addLog('')
-      addLog('📋 Next steps:')
-      addLog('1. Download the Flutter project')
-      addLog('2. Push to GitHub repository')
-      addLog('3. GitHub Actions will build automatically')
-      addLog('4. Download APK/IPA/EXE from Actions artifacts')
+      addLog('🎉 APK build complete!')
+      addLog(`Repository: https://github.com/${actualOwner}/${repoName}`)
       
     } catch (error) {
-      setBuildStatus(`❌ Error: ${error instanceof Error ? error.message : 'Generation failed'}`)
-      addLog(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      setBuildStatus(`❌ Error: ${errorMessage}`)
+      addLog(`Error: ${errorMessage}`)
     } finally {
       setIsBuilding(false)
     }
   }
-  
-  // Suppress unused variable warning
-  void githubToken
-  void setGithubToken
 
-  // Download the Flutter project
+  // Download APK or open GitHub Actions page
   const handleDownload = async () => {
     if (!downloadUrl) return
     
     try {
-      addLog('Preparing download...')
-      const files = generateFiles()
+      addLog('Opening download...')
       
-      // Create a comprehensive project file with all code
-      let content = `# ═══════════════════════════════════════════════════════════════
-# ${config.appName} - Flutter Project
-# Generated by Aurora Builder
-# ═══════════════════════════════════════════════════════════════
-
-# INSTRUCTIONS:
-# 1. Create a new folder for your project
-# 2. Create each file below in its respective path
-# 3. Run: flutter create . (to initialize Flutter project)
-# 4. Copy these files over the generated ones
-# 5. Run: flutter pub get
-# 6. Build: flutter build apk --release (Android)
-#          flutter build ios --release (iOS - requires Mac)
-#          flutter build windows --release (Windows)
-#          flutter build macos --release (macOS)
-#          flutter build linux --release (Linux)
-#          flutter build web --release (Web)
-#
-# OR push to GitHub and let GitHub Actions build automatically!
-
-`
-      
-      Object.entries(files).forEach(([path, code]) => {
-        content += `
-# ═══════════════════════════════════════════════════════════════
-# FILE: ${path}
-# ═══════════════════════════════════════════════════════════════
-
-${code}
-
-`
-      })
-      
-      // Add README with instructions
-      content += `
-# ═══════════════════════════════════════════════════════════════
-# FILE: README.md
-# ═══════════════════════════════════════════════════════════════
-
-# ${config.appName}
-
-${config.description}
-
-## Build Instructions
-
-### Option 1: GitHub Actions (Recommended - No setup required!)
-1. Create a new GitHub repository
-2. Push this code to the repository
-3. Go to Actions tab
-4. The workflow will automatically build APK/IPA/EXE
-5. Download artifacts from the completed workflow
-
-### Option 2: Local Build
-1. Install Flutter SDK: https://flutter.dev/docs/get-started/install
-2. Run: \`flutter create .\`
-3. Replace generated files with these files
-4. Run: \`flutter pub get\`
-5. Build for your platform:
-   - Android: \`flutter build apk --release\`
-   - iOS: \`flutter build ios --release\` (requires Mac with Xcode)
-   - Windows: \`flutter build windows --release\`
-   - macOS: \`flutter build macos --release\`
-   - Linux: \`flutter build linux --release\`
-   - Web: \`flutter build web --release\`
-
-## Generated by Aurora Builder
-Made with 💚 by Mostafa
-https://github.com/moustuofa
-`
-      
-      const blob = new Blob([content], { type: 'text/plain' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${config.appName.replace(/\\s+/g, '_')}_flutter_project.txt`
-      a.click()
-      URL.revokeObjectURL(url)
-      addLog('✅ Downloaded Flutter project successfully!')
+      // If it's a GitHub Actions artifact URL, open it directly
+      if (downloadUrl.includes('github.com') || downloadUrl.includes('api.github.com')) {
+        // For artifact URLs, we need to download with auth header
+        if (downloadUrl.includes('api.github.com') && githubToken) {
+          const cleanToken = githubToken.trim().replace(/[^\x20-\x7E]/g, '')
+          const authHeader = cleanToken.startsWith('github_pat_') ? `Bearer ${cleanToken}` : `token ${cleanToken}`
+          
+          const response = await fetch(downloadUrl, {
+            headers: {
+              'Authorization': authHeader,
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28'
+            }
+          })
+          
+          if (response.ok) {
+            const blob = await response.blob()
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `${config.appName.replace(/\s+/g, '_')}.zip`
+            a.click()
+            URL.revokeObjectURL(url)
+            addLog('✅ Downloaded APK successfully!')
+          } else {
+            // Open GitHub Actions page instead
+            window.open(downloadUrl, '_blank')
+            addLog('📂 Opened GitHub Actions page')
+          }
+        } else {
+          // Open GitHub Actions page
+          window.open(downloadUrl, '_blank')
+          addLog('📂 Opened GitHub Actions page')
+        }
+      } else {
+        // Download project files as fallback
+        const files = generateFiles()
+        let content = `# ${config.appName} - Flutter Project\n# Generated by Aurora Builder\n\n`
+        
+        Object.entries(files).forEach(([path, code]) => {
+          content += `\n${'='.repeat(60)}\n# FILE: ${path}\n${'='.repeat(60)}\n\n${code}\n`
+        })
+        
+        const blob = new Blob([content], { type: 'text/plain' })
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = `${config.appName.replace(/\s+/g, '_')}_flutter_project.txt`
+        a.click()
+        URL.revokeObjectURL(url)
+        addLog('✅ Downloaded Flutter project successfully!')
+      }
     } catch (error) {
       addLog('Download failed: ' + (error instanceof Error ? error.message : 'Unknown error'))
+      // Fallback: open URL in new tab
+      window.open(downloadUrl, '_blank')
     }
   }
 
@@ -1852,50 +2006,46 @@ https://github.com/moustuofa
             </div>
           )}
 
-          {/* Step 6: Build */}
+          {/* Step 6: Build APK */}
           {currentStep === 6 && (
             <div className="step-panel build-step">
               <div className="build-content">
                 <div className="card compact">
                   <div className="card-header">
-                    <span className="card-icon">🚀</span>
-                    <h2>{t.build}</h2>
+                    <span className="card-icon">🤖</span>
+                    <h2>{language === 'ar' ? 'بناء APK' : language === 'fa' ? 'ساخت APK' : language === 'fr' ? 'Construire APK' : language === 'es' ? 'Construir APK' : 'Build APK'}</h2>
                   </div>
                   
                   <p className="card-desc" style={{ marginBottom: '0.6rem' }}>
-                    {language === 'ar' ? 'قم بإنشاء مشروع Flutter كامل جاهز للبناء لجميع المنصات' :
-                     language === 'fa' ? 'یک پروژه کامل Flutter آماده ساخت برای همه پلتفرم‌ها ایجاد کنید' :
-                     language === 'fr' ? 'Générez un projet Flutter complet prêt à être construit pour toutes les plateformes' :
-                     language === 'es' ? 'Genere un proyecto Flutter completo listo para construir para todas las plataformas' :
-                     'Generate a complete Flutter project ready to build for all platforms'}
+                    {language === 'ar' ? 'أدخل رمز GitHub الخاص بك لبناء APK تلقائياً' :
+                     language === 'fa' ? 'توکن GitHub خود را وارد کنید تا APK به صورت خودکار ساخته شود' :
+                     language === 'fr' ? 'Entrez votre token GitHub pour construire l\'APK automatiquement' :
+                     language === 'es' ? 'Ingrese su token de GitHub para construir el APK automáticamente' :
+                     'Enter your GitHub token to build APK automatically'}
                   </p>
                   
-                  <div className="platforms-grid">
-                    <div className="platform-item">
-                      <span className="platform-icon">🤖</span>
-                      <span className="platform-name">Android APK</span>
-                    </div>
-                    <div className="platform-item">
-                      <span className="platform-icon">🍎</span>
-                      <span className="platform-name">iOS IPA</span>
-                    </div>
-                    <div className="platform-item">
-                      <span className="platform-icon">🪟</span>
-                      <span className="platform-name">Windows</span>
-                    </div>
-                    <div className="platform-item">
-                      <span className="platform-icon">🖥️</span>
-                      <span className="platform-name">macOS</span>
-                    </div>
-                    <div className="platform-item">
-                      <span className="platform-icon">🐧</span>
-                      <span className="platform-name">Linux</span>
-                    </div>
-                    <div className="platform-item">
-                      <span className="platform-icon">🌐</span>
-                      <span className="platform-name">Web</span>
-                    </div>
+                  <div className="form-group">
+                    <label>{t.personalToken}</label>
+                    <input
+                      type="password"
+                      value={githubToken}
+                      onChange={e => setGithubToken(e.target.value)}
+                      placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+                    />
+                    <p className="help-text">
+                      💡 <a href="https://github.com/settings/tokens/new?scopes=repo,workflow" target="_blank" rel="noopener noreferrer" style={{ color: '#00DC82' }}>
+                        {language === 'ar' ? 'احصل على الرمز هنا' : language === 'fa' ? 'توکن را اینجا بگیرید' : language === 'fr' ? 'Obtenez le token ici' : language === 'es' ? 'Obtenga el token aquí' : 'Get token here'}
+                      </a> → {language === 'ar' ? 'اختر صلاحيات repo و workflow' : language === 'fa' ? 'دسترسی‌های repo و workflow را انتخاب کنید' : language === 'fr' ? 'Sélectionnez les permissions repo et workflow' : language === 'es' ? 'Seleccione permisos repo y workflow' : 'Select repo & workflow permissions'}
+                    </p>
                   </div>
+                  
+                  <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                    <span style={{ fontSize: '0.6rem', color: 'rgba(0, 220, 130, 0.6)' }}>— {language === 'ar' ? 'أو' : language === 'fa' ? 'یا' : language === 'fr' ? 'ou' : language === 'es' ? 'o' : 'or'} —</span>
+                  </div>
+                  
+                  <button onClick={() => { generateFiles(); downloadAllFiles(); }} className="btn-secondary full-width" style={{ marginTop: '0.5rem' }}>
+                    📥 {language === 'ar' ? 'تحميل ملفات المشروع' : language === 'fa' ? 'دانلود فایل‌های پروژه' : language === 'fr' ? 'Télécharger les fichiers' : language === 'es' ? 'Descargar archivos' : 'Download Project Files'}
+                  </button>
                 </div>
 
                 <div className="card compact">
@@ -1952,7 +2102,7 @@ https://github.com/moustuofa
                   </div>
                   <div className="build-progress-info">
                     <span className="build-progress-percent">{buildProgress}%</span>
-                    <span className="build-progress-status">{buildStatus}</span>
+                    <span className="build-progress-status">{buildStatus || (t.waitingBuild || 'Waiting to start build...')}</span>
                   </div>
                 </div>
                 
@@ -1976,12 +2126,32 @@ https://github.com/moustuofa
                 {/* Download Button */}
                 {buildComplete && downloadUrl && (
                   <button onClick={handleDownload} className="download-btn-large">
-                    <span>📥</span> {language === 'ar' ? 'تحميل مشروع Flutter' :
-                                    language === 'fa' ? 'دانلود پروژه Flutter' :
-                                    language === 'fr' ? 'Télécharger le projet Flutter' :
-                                    language === 'es' ? 'Descargar proyecto Flutter' :
-                                    'Download Flutter Project'}
+                    <span>📥</span> {language === 'ar' ? 'تحميل APK' :
+                                    language === 'fa' ? 'دانلود APK' :
+                                    language === 'fr' ? 'Télécharger APK' :
+                                    language === 'es' ? 'Descargar APK' :
+                                    'Download APK'}
                   </button>
+                )}
+                
+                {/* Not started message */}
+                {!isBuilding && !buildComplete && buildLogs.length === 0 && (
+                  <div style={{ textAlign: 'center', padding: '1rem' }}>
+                    <p style={{ color: 'rgba(0, 220, 130, 0.6)', fontSize: '0.7rem' }}>
+                      {language === 'ar' ? 'انتقل إلى صفحة البناء وانقر على "بناء APK"' :
+                       language === 'fa' ? 'به صفحه ساخت بروید و روی "ساخت APK" کلیک کنید' :
+                       language === 'fr' ? 'Allez à la page Build et cliquez sur "Construire APK"' :
+                       language === 'es' ? 'Ve a la página Build y haz clic en "Construir APK"' :
+                       'Go to Build page and click "Build APK"'}
+                    </p>
+                    <button 
+                      onClick={() => setCurrentStep(6)} 
+                      className="btn-secondary"
+                      style={{ marginTop: '0.5rem' }}
+                    >
+                      ← {language === 'ar' ? 'العودة للبناء' : language === 'fa' ? 'برگشت به ساخت' : language === 'fr' ? 'Retour au Build' : language === 'es' ? 'Volver a Build' : 'Back to Build'}
+                    </button>
+                  </div>
                 )}
               </div>
             </div>
@@ -4964,5 +5134,4 @@ https://github.com/moustuofa
     </div>
   )
 }
-
 export default App
